@@ -278,5 +278,71 @@ try:
 finally:
     A._req = real_req
 
+
+# ---------------------------------------------------------------- dashboard
+print("[dashboard]  (real HTTP server on ephemeral port, temp DB)")
+import json as _json_dash
+import tempfile
+import threading
+import urllib.error
+import urllib.request
+
+from athena.store import Store as _Store
+from athena.web import create_server
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    _s = _Store(Path(td) / "w.db")
+    _snap = [{"key": "sub:a.x.com", "kind": "subdomain", "attrs": {"a": ["1.1.1.1"]},
+              "sources": ["crt.sh"], "first_seen": "t", "last_seen": "t", "confidence": 50},
+             {"key": "svc:a.x.com:443", "kind": "service", "attrs": {"product": "nginx"},
+              "sources": ["shodan"], "first_seen": "t", "last_seen": "t", "confidence": 50}]
+    _s.upsert_assets(_snap)
+    _s.write_snapshot("x.com", _snap, "test")
+    _s.insert_event("x.com", "appeared", "svc:a.x.com:443",
+                    {"attrs": {"product": "nginx"}, "sources": ["shodan"]},
+                    6.8, ["T1190 edge"], [])
+    _s.close()
+    _srv = create_server(Path(td) / "w.db", "127.0.0.1", 0, "TESTTOKEN")
+    _port = _srv.server_address[1]
+    threading.Thread(target=_srv.serve_forever, daemon=True).start()
+    _base = f"http://127.0.0.1:{_port}"
+
+    def _get(path, token=None):
+        req = urllib.request.Request(_base + path)
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    _st, _ = _get("/api/scopes")
+    check("dashboard: no token -> 401", _st == 401)
+    _st, _ = _get("/api/scopes", token="WRONG")
+    check("dashboard: wrong token -> 401", _st == 401)
+    _st, _b = _get("/api/scopes", token="TESTTOKEN")
+    _js = _json_dash.loads(_b)
+    check("dashboard: scopes api shape", _st == 200 and _js[0]["scope"] == "x.com"
+          and _js[0]["scans"] == 1 and _js[0]["events"] == 1, _js)
+    _st, _b = _get("/api/vectors?scope=x.com", token="TESTTOKEN")
+    _js = _json_dash.loads(_b)
+    check("dashboard: vectors api shape", _st == 200 and _js
+          and _js[0]["asset"] == "svc:a.x.com:443" and _js[0]["label"] == "HIGH", _js[:1])
+    _st, _b = _get("/api/assets?scope=x.com&kind=subdomain", token="TESTTOKEN")
+    _js = _json_dash.loads(_b)
+    check("dashboard: assets api (subdomain)", _st == 200 and len(_js) == 1
+          and _js[0]["sources"] == ["crt.sh"], _js)
+    _st, _b = _get("/api/assets?scope=x.com&kind=service", token="TESTTOKEN")
+    _js = _json_dash.loads(_b)
+    check("dashboard: assets api (service via snapshot membership)",
+          _st == 200 and len(_js) == 1 and _js[0]["key"] == "svc:a.x.com:443", _js)
+    _st, _b = _get("/", token="TESTTOKEN")
+    check("dashboard: page served", _st == 200 and b"ATH" in _b)
+    _st, _ = _get("/nope", token="TESTTOKEN")
+    check("dashboard: 404 for unknown route", _st == 404)
+    _srv.shutdown()
+    _srv.server_close()
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
