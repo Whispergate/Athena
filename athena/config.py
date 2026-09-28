@@ -42,6 +42,7 @@ def provider_status() -> list[tuple[str, bool, str]]:
         ("otx", True, "passive DNS (key optional)"),
         ("securitytrails", bool(get("SECURITYTRAILS_API_KEY")), "subdomains + DNS"),
         ("wayback", True, "keyless historical URLs (CDX)"),
+        ("rdap", True, "keyless registry expiry/status"),
         ("netlas", bool(get("NETLAS_API_KEY")),
          "EXPERIMENTAL — free tier gates search data"),
         ("zoomeye", bool(get("ZOOMEYE_API_KEY")),

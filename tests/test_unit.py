@@ -344,5 +344,58 @@ with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
     _srv.shutdown()
     _srv.server_close()
 
+
+# ---------------------------------------------------------------- standing conditions
+print("[standing conditions]  (cert + domain expiry)")
+from datetime import datetime as _dt
+from datetime import timedelta as _td
+from datetime import timezone as _tz
+
+from athena.enrich import standing_events as _sev
+
+_now = _dt.now(_tz.utc)
+def _svc(exp):
+    return {"key": "svc:x.com:443", "kind": "service",
+            "attrs": {"cert_expires": exp}, "sources": ["shodan"]}
+
+evs = _sev([_svc((_now + _td(days=5)).timestamp())])
+check("cert expiring in 5d -> MEDIUM-tier event",
+      len(evs) == 1 and evs[0]["kind"] == "cert_expiry" and 5.0 < evs[0]["severity"] <= 5.5,
+      evs)
+evs = _sev([_svc((_now + _td(days=60)).isoformat())])
+check("cert 60d out -> no event", evs == [])
+evs = _sev([_svc((_now - _td(days=3)).timestamp())])
+check("cert EXPIRED -> HIGH phishing-enabler",
+      len(evs) == 1 and evs[0]["severity"] == 7.5 and "phishing" in evs[0]["detail"]["notes"][0],
+      evs)
+evs = _sev([_svc("not-a-date")])
+check("unparseable expiry ignored", evs == [])
+
+_dmg = {"key": "dom:x.com", "kind": "domain",
+        "attrs": {"expiry": (_now + _td(days=10)).date().isoformat()}, "sources": ["rdap"]}
+evs = _sev([_dmg])
+check("domain expiry 10d -> MEDIUM watch",
+      len(evs) == 1 and evs[0]["kind"] == "domain_expiry" and evs[0]["severity"] == 4.5, evs)
+_dmg2 = {"key": "dom:x.com", "kind": "domain",
+         "attrs": {"expiry": (_now - _td(days=2)).date().isoformat()}, "sources": ["rdap"]}
+evs = _sev([_dmg2])
+check("domain EXPIRED -> HIGH + T1583.001 drop-catch",
+      len(evs) == 1 and evs[0]["severity"] == 8.2
+      and any("T1583.001" in t for t in evs[0]["techniques"]), evs)
+# dedup material embeds expiry: renewal creates a NEW one-shot event
+e1 = _sev([_svc((_now + _td(days=5)).timestamp())])[0]
+check("cert event material embeds expiry date", "cert:" in e1["material"], e1["material"])
+
+# rdap fixture (mocked)
+rdap_resp = {"events": [{"eventAction": "registration", "eventDate": "2005-01-01T00:00:00Z"},
+                        {"eventAction": "expiration", "eventDate": "2027-05-30T00:00:00Z"}],
+             "status": ["active", "client transfer prohibited"]}
+recs, err = with_mock(rdap_resp, lambda: P.rdap_domain("x.com"))
+check("rdap parse: expiry + status extracted",
+      err is None and len(recs) == 1 and recs[0]["expiry"].startswith("2027-05-30")
+      and "active" in recs[0]["status"], (err, recs))
+recs, err = with_mock({"events": []}, lambda: P.rdap_domain("x.com"))
+check("rdap without expiry -> clean empty", err is None and recs == [])
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

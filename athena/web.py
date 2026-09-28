@@ -171,7 +171,7 @@ async function load(){
  $("as").innerHTML="<tr><th>asset</th><th>sources</th><th>conf</th><th>first seen</th></tr>"+
   as.map(a=>`<tr><td>${a.key}</td><td class="muted">${a.sources.join(",")}</td><td>${a.confidence}</td><td class="muted">${a.first_seen.slice(0,10)}</td></tr>`).join("");
 }
-for(const k of["subdomain","service","ip"]){const t=document.createElement("div");t.className="tab"+(k==kind?" on":"");t.textContent=k;
+for(const k of["subdomain","service","ip","domain"]){const t=document.createElement("div");t.className="tab"+(k==kind?" on":"");t.textContent=k;
  t.onclick=()=>{kind=k;document.querySelectorAll(".tab").forEach(x=>x.classList.remove("on"));t.classList.add("on");load()};$("tabs").append(t)}
 $("scope").onchange=load;$("q").oninput=()=>load();
 load();setInterval(load,30000);

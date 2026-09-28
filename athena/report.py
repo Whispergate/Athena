@@ -168,6 +168,16 @@ def markdown(scope: str, stats: dict, vectors: list[dict], errors: list, ts: str
     L.append("## Asset inventory (complete)")
     L.append("")
 
+    domains = [a for a in assets if a["kind"] == "domain"]
+    if domains:
+        L.append(f"### Domains ({len(domains)})")
+        L.append("")
+        L.append(_tbl(["domain", "reg. expiry", "status", "sources"],
+                      [[a["key"][4:], a["attrs"].get("expiry", "—"),
+                        ", ".join(a["attrs"].get("status") or []) or "—",
+                        ", ".join(a["sources"])] for a in domains]))
+        L.append("")
+
     L.append(f"### Subdomains ({len(subdomains)})")
     L.append("")
     if subdomains:

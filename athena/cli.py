@@ -14,7 +14,14 @@ import time
 from . import __version__, alert, config
 from . import report as rep
 from .diff import diff_snapshots
-from .enrich import ATTACK_TABLE, _fingerprint, enrich_event, load_kev, severity_label
+from .enrich import (
+    ATTACK_TABLE,
+    _fingerprint,
+    enrich_event,
+    load_kev,
+    severity_label,
+    standing_events,
+)
 from .normalize import build_assets, utcnow
 from .paths import DB_PATH, OUT_DIR
 from .paths import ensure as ensure_paths
@@ -119,6 +126,12 @@ def run_scan(scope: str, do_alert: bool = True, extra_subs: str | None = None) -
 
     events = diff_snapshots(store, scope, snap_id)
     print(f"[*] snapshot #{snap_id} · diff: {len(events)} raw event(s)")
+
+    # standing conditions (cert/domain expiry) — true now, not scan-to-scan
+    standing = standing_events(asset_list)
+    if standing:
+        print(f"[*] standing conditions: {len(standing)} expiry finding(s)")
+        events = events + standing
 
     kev = load_kev()
 
@@ -288,7 +301,16 @@ def cmd_events(args):
     store = Store(DB_PATH)
     evs = store.events(args.scope, args.since)
     if not evs:
-        print("no events stored")
+        print("[]" if args.json else "no events stored")
+        return
+    if args.json:
+        out = []
+        for e in evs:
+            e = dict(e)
+            e["techniques"] = json.loads(e.pop("techniques") or "[]")
+            e["kev_cves"] = json.loads(e.pop("kev_cves") or "[]")
+            out.append(e)
+        print(json.dumps(out, indent=2, default=str))
         return
     print(f"{len(evs)} event(s):")
     for e in evs:
@@ -399,6 +421,7 @@ def main():
     e = sub.add_parser("events", help="list stored events")
     e.add_argument("--scope")
     e.add_argument("--since")
+    e.add_argument("--json", action="store_true", help="emit JSON (scripting)")
 
     r = sub.add_parser("report", help="regenerate report from stored events")
     r.add_argument("--scope", required=True)
