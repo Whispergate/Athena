@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "athena-recon"
+version = "0.1.0"
+description = "Athena — passive external attack-surface diff engine for red teams"
+readme = "README.md"
+license = { text = "BSD-2-Clause" }
+requires-python = ">=3.10"
+authors = [{ name = "Whispergate" }]
+keywords = ["red-team", "recon", "easm", "attack-surface", "osint", "passive"]
+classifiers = [
+    "Topic :: Security",
+    "Environment :: Console",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3 :: Only",
+]
+
+[project.scripts]
+athena = "athena.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["athena*"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+# BLE001/S110/S112 (blind except, silent pass/continue): deliberate —
+# provider, cache, and store failures must degrade gracefully and never
+# kill a scan. Every adapter returns (result, error) instead of raising.
+ignore = ["BLE001", "S110", "S112"]
