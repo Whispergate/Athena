@@ -1,0 +1,25 @@
+name: ci
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: lint
+        run: |
+          pip install ruff
+          ruff check athena tests
+      - name: install (validates packaging)
+        run: pip install -e .
+      - name: unit tests
+        run: python tests/test_unit.py
+      - name: entry point
+        run: athena --version

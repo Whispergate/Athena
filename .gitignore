@@ -1,0 +1,12 @@
+.env
+out/
+data/
+*.db
+*.db-wal
+*.db-shm
+tools/
+__pycache__/
+*.pyc
+.ruff_cache/
+*.egg-info/
+scopes.local.yaml

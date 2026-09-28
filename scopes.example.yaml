@@ -1,0 +1,16 @@
+# Athena scopes file — copy to scopes.local.yaml and edit.
+# Every field is optional except domains; defaults shown.
+#
+# touch:     passive (default) — provider APIs + CT logs only, 0 packets to target
+# interval:  minutes between scans per scope
+# role: self — marks infrastructure you OWN (self-watch: your redirectors, C2)
+
+scopes:
+  - name: acme-corp
+    domains: [acme-corp.com, acme-labs.io]
+    interval_min: 60
+
+  - name: our-infra
+    domains: [redirector1.example.net, cdn-front.example.org]
+    interval_min: 30
+    role: self
