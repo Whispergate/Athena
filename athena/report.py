@@ -279,6 +279,74 @@ def to_json(scope: str, vectors: list[dict], ts: str) -> dict:
     }
 
 
+def dedupe_vectors(vectors: list[dict]) -> list[dict]:
+    """One vector per asset — keep the highest-severity occurrence, re-rank.
+    Multiple stored events can describe the same asset (baseline + diff); the
+    hand-off contract and dashboards present asset-level truth."""
+    best: dict[str, dict] = {}
+    for v in vectors:
+        k = v["asset"]
+        if k not in best or v["severity"] > best[k]["severity"]:
+            best[k] = v
+    return sorted(best.values(), key=lambda v: -v["severity"])
+
+
+def handoff_payload(scope: str, vectors: list[dict], ts: str,
+                    athena_version: str) -> dict:
+    """The versioned Erebus hand-off contract (schema athena/entry-vectors/1).
+
+    Recon -> ranked entry vector -> payload generation, with the operator
+    approving every hop. Everything here is a passive hypothesis; consumers
+    must treat `operator_review_required` as binding."""
+    def _host_port(asset_key: str) -> tuple[str, int | None]:
+        body = asset_key.split(":", 1)[1]
+        if ":" in body:
+            host, _, port = body.rpartition(":")
+            return host, int(port) if port.isdigit() else None
+        return body, None
+
+    def _action(v: dict) -> str:
+        attrs = v.get("attrs") or {}
+        if v["kev_cves"]:
+            return ("verify affected version, then stage exploit chain via "
+                    "erebus if rules of engagement permit")
+        if attrs.get("dangling"):
+            return ("verify upstream name availability; claim for "
+                    "phishing/relay infrastructure")
+        if any("T1190" in t for t in v["techniques"]):
+            return "confirm build via banner/version fingerprint before staging"
+        return "review evidence and verify before use"
+
+    out = []
+    for i, v in enumerate(vectors, 1):
+        host, port = _host_port(v["asset"])
+        attrs = v.get("attrs") or {}
+        banner = str(attrs.get("banner") or "")[:160]
+        out.append({
+            "rank": i,
+            "asset": v["asset"], "kind": v["kind"],
+            "host": host, "port": port,
+            "product": attrs.get("product"), "version": attrs.get("version"),
+            "cves": attrs.get("cves", []),
+            "kev_cves": v["kev_cves"],
+            "techniques": [t.split(" ")[0] for t in v["techniques"]],
+            "severity": v["severity"], "label": v["label"],
+            "confidence": v.get("conf"),
+            "evidence": {"sources": v.get("sources", []),
+                         "banner_excerpt": banner or None,
+                         "notes": v.get("notes", [])},
+            "recommended_action": _action(v),
+        })
+    return {
+        "schema": "athena/entry-vectors/1",
+        "tool": "athena", "athena_version": athena_version,
+        "scope": scope, "generated": ts, "touch": "passive",
+        "claim": "consistent-with (passive banner data) — verify before relying",
+        "operator_review_required": True,
+        "entry_vectors": out,
+    }
+
+
 def write_files(out_dir: Path, scope: str, stats: dict, vectors: list[dict],
                 errors: list, ts: str, assets: list[dict] | None = None) -> tuple[Path, Path]:
     out_dir.mkdir(parents=True, exist_ok=True)
