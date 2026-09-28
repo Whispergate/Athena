@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "athena-recon"
-version = "0.1.0"
+version = "0.2.0"
 description = "Athena — passive external attack-surface diff engine for red teams"
 readme = "README.md"
 license = { text = "BSD-2-Clause" }

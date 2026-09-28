@@ -148,3 +148,74 @@ def severity_label(sev: float) -> str:
     if sev >= 4.0:
         return "MEDIUM"
     return "LOW"
+
+
+# ---------------------------------------------------------------- standing conditions
+
+def _to_dt(v) -> datetime | None:
+    """Coerce provider expiry values (epoch int/float or ISO/date str) to UTC."""
+    try:
+        if isinstance(v, (int, float)):
+            return datetime.fromtimestamp(v, tz=timezone.utc)
+        s = str(v).strip().replace("Z", "+00:00")
+        dt = datetime.fromisoformat(s)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt
+    except (ValueError, OSError, OverflowError, TypeError):
+        return None
+
+
+def _standing_event(kind: str, asset: dict, severity: float, notes: list[str],
+                    material: str, techniques: list[str] | None = None) -> dict:
+    return {
+        "kind": kind, "asset_key": asset["key"], "asset_kind": asset["kind"],
+        "severity": severity, "techniques": techniques or [], "kev_cves": [],
+        "detail": {"attrs": asset.get("attrs", {}),
+                   "sources": asset.get("sources", []), "notes": notes},
+        "material": material,
+    }
+
+
+def standing_events(asset_list: list[dict], cert_days: int = 14,
+                    domain_days: int = 30) -> list[dict]:
+    """Conditions true NOW rather than changes between scans: certificate and
+    domain-registration expiry windows. Dedup material embeds the expiry value
+    itself, so a renewal creates a new (one-shot) event and the old one rests."""
+    evs: list[dict] = []
+    now = datetime.now(timezone.utc)
+    for a in asset_list:
+        attrs = a.get("attrs", {})
+        # certificates on services
+        dt = _to_dt(attrs.get("cert_expires")) if attrs.get("cert_expires") else None
+        if dt is not None:
+            days = (dt - now).total_seconds() / 86400
+            date = dt.date().isoformat()
+            if days < 0:
+                note = (f"leaf certificate EXPIRED {-days:.0f} days ago ({date}) — "
+                        "browser warnings train users to click through (phishing enabler)")
+                evs.append(_standing_event("cert_expiry", a, 7.5, [note],
+                                           f"cert:{date}"))
+            elif days <= cert_days:
+                sev = 5.2 if days <= 7 else 4.2
+                note = f"leaf certificate expires in {days:.0f} days ({date})"
+                evs.append(_standing_event("cert_expiry", a, sev, [note],
+                                           f"cert:{date}"))
+        # domain registration (rdap)
+        if a["kind"] == "domain" and attrs.get("expiry"):
+            dt = _to_dt(attrs["expiry"])
+            if dt is not None:
+                days = (dt - now).total_seconds() / 86400
+                date = dt.date().isoformat()
+                if days < 0:
+                    note = (f"domain registration EXPIRED {-days:.0f} days ago ({date}) — "
+                            "imminent drop-catch takeover window")
+                    evs.append(_standing_event(
+                        "domain_expiry", a, 8.2, [note], f"domexp:{date}",
+                        ["T1583.001 Acquire Infrastructure: Domains — drop-catch window"]))
+                elif days <= domain_days:
+                    note = (f"domain registration expires in {days:.0f} days ({date}) — "
+                            "monitor for lapse (drop-catch takeover risk)")
+                    evs.append(_standing_event("domain_expiry", a, 4.5, [note],
+                                               f"domexp:{date}"))
+    return evs
