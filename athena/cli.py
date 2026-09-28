@@ -366,6 +366,15 @@ def cmd_export(args):
     store.close()
 
 
+def cmd_serve(args):
+    """Read-only web dashboard (localhost + token auth)."""
+    from .web import serve
+
+    config.load_env()
+    ensure_paths()
+    serve(DB_PATH, bind=args.bind, port=args.port)
+
+
 def main():
     p = argparse.ArgumentParser(prog="athena",
                                 description="passive external attack-surface intelligence")
@@ -398,11 +407,16 @@ def main():
     x = sub.add_parser("export", help="export assets/IOCs/events as a JSON feed")
     x.add_argument("--scope", required=True)
 
+    v = sub.add_parser("serve", help="read-only web dashboard (localhost + token)")
+    v.add_argument("--port", type=int, default=7777)
+    v.add_argument("--bind", default="127.0.0.1")
+
     args = p.parse_args()
     if args.cmd == "watch" and not args.config and not args.scope:
         p.error("watch needs --config or --scope")
     {"doctor": cmd_doctor, "scan": cmd_scan, "watch": cmd_watch, "events": cmd_events,
-     "report": cmd_report, "export": cmd_export}[args.cmd](args)
+     "report": cmd_report, "export": cmd_export,
+     "serve": cmd_serve}[args.cmd](args)
 
 
 if __name__ == "__main__":
