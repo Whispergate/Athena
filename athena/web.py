@@ -77,7 +77,7 @@ class Dash:
         return rows
 
     def vectors(self, scope: str) -> list[dict]:
-        return rep.entry_vectors(self.events(scope, 500), {})
+        return rep.dedupe_vectors(rep.entry_vectors(self.events(scope, 500), {}))
 
     def assets(self, scope: str, kind: str, q: str, limit: int) -> list[dict]:
         lim = max(1, min(limit, 1000))

@@ -388,6 +388,31 @@ def cmd_export(args):
     store.close()
 
 
+def cmd_handoff(args):
+    """Emit the versioned Erebus hand-off contract (entry-vectors JSON)."""
+    config.load_env()
+    ensure_paths()
+    store = Store(DB_PATH)
+    scope = args.scope.lower().strip()
+    evs = store.events(scope)
+    assets_by_key = {}
+    for e in evs:
+        if e["asset_key"] not in assets_by_key:
+            a = store.asset(e["asset_key"])
+            if a:
+                assets_by_key[e["asset_key"]] = a
+    vectors = [v for v in rep.entry_vectors(evs, assets_by_key)
+               if v["severity"] >= args.min_severity]
+    vectors = rep.dedupe_vectors(vectors)
+    payload = rep.handoff_payload(scope, vectors, utcnow(), __version__)
+    out = OUT_DIR / f"{scope}-handoff.json"
+    out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    print(json.dumps(payload, indent=2, default=str))
+    print(f"\n[*] hand-off written: {out} · {len(vectors)} vector(s) >= "
+          f"{args.min_severity}", file=sys.stderr)
+    store.close()
+
+
 def cmd_serve(args):
     """Read-only web dashboard (localhost + token auth)."""
     from .web import serve
@@ -430,6 +455,10 @@ def main():
     x = sub.add_parser("export", help="export assets/IOCs/events as a JSON feed")
     x.add_argument("--scope", required=True)
 
+    h = sub.add_parser("handoff", help="emit the Erebus entry-vectors contract")
+    h.add_argument("--scope", required=True)
+    h.add_argument("--min-severity", type=float, default=4.0)
+
     v = sub.add_parser("serve", help="read-only web dashboard (localhost + token)")
     v.add_argument("--port", type=int, default=7777)
     v.add_argument("--bind", default="127.0.0.1")
@@ -439,7 +468,7 @@ def main():
         p.error("watch needs --config or --scope")
     {"doctor": cmd_doctor, "scan": cmd_scan, "watch": cmd_watch, "events": cmd_events,
      "report": cmd_report, "export": cmd_export,
-     "serve": cmd_serve}[args.cmd](args)
+     "serve": cmd_serve, "handoff": cmd_handoff}[args.cmd](args)
 
 
 if __name__ == "__main__":

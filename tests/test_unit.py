@@ -397,5 +397,44 @@ check("rdap parse: expiry + status extracted",
 recs, err = with_mock({"events": []}, lambda: P.rdap_domain("x.com"))
 check("rdap without expiry -> clean empty", err is None and recs == [])
 
+
+# ---------------------------------------------------------------- erebus handoff
+print("[handoff contract]")
+from athena.report import handoff_payload as _hp
+
+_hvecs = [{"asset": "svc:vpn.x.com:443", "kind": "service", "event": "observed",
+           "severity": 9.4, "label": "CRITICAL",
+           "techniques": ["T1190 Exploit Public-Facing Application"],
+           "kev_cves": ["CVE-2023-3519"], "attrs": {"product": "Citrix NetScaler",
+                                                    "version": "13.0", "banner": "B" * 300},
+           "notes": ["n"], "sources": ["shodan", "fofa"], "conf": 96},
+          {"asset": "sub:old.x.com", "kind": "subdomain", "event": "appeared",
+           "severity": 6.5, "label": "HIGH", "techniques": ["T1583.001 x"],
+           "kev_cves": [], "attrs": {"dangling": True, "cname": "g.herokuapp.com"},
+           "notes": [], "sources": ["otx"], "conf": 65}]
+_h = _hp("x.com", _hvecs, "2026-09-28T00:00:00+00:00", "0.2.0")
+check("handoff schema stamped", _h["schema"] == "athena/entry-vectors/1"
+      and _h["operator_review_required"] is True and _h["touch"] == "passive")
+_v1 = _h["entry_vectors"][0]
+check("handoff host/port parsed", _v1["host"] == "vpn.x.com" and _v1["port"] == 443)
+check("handoff banner excerpt capped", _v1["evidence"]["banner_excerpt"]
+      and len(_v1["evidence"]["banner_excerpt"]) <= 160)
+check("handoff techniques are ids", _v1["techniques"] == ["T1190"])
+check("handoff kev action", "erebus" in _v1["recommended_action"])
+_v2 = _h["entry_vectors"][1]
+check("handoff dangling action", "claim" in _v2["recommended_action"])
+
+
+# handoff dedupe
+from athena.report import dedupe_vectors as _dv
+
+_dup = [{"asset": "svc:x:443", "severity": 6.8, "label": "HIGH"},
+        {"asset": "svc:x:443", "severity": 6.8, "label": "HIGH"},
+        {"asset": "ip:1.2.3.4", "severity": 5.5, "label": "MEDIUM"},
+        {"asset": "svc:x:443", "severity": 3.0, "label": "LOW"}]
+_dvd = _dv(_dup)
+check("vectors deduped per asset (max severity kept)",
+      len(_dvd) == 2 and _dvd[0]["asset"] == "svc:x:443" and _dvd[0]["severity"] == 6.8, _dvd)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)
