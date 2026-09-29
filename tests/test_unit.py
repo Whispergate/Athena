@@ -278,5 +278,163 @@ try:
 finally:
     A._req = real_req
 
+
+# ---------------------------------------------------------------- dashboard
+print("[dashboard]  (real HTTP server on ephemeral port, temp DB)")
+import json as _json_dash
+import tempfile
+import threading
+import urllib.error
+import urllib.request
+
+from athena.store import Store as _Store
+from athena.web import create_server
+
+with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as td:
+    _s = _Store(Path(td) / "w.db")
+    _snap = [{"key": "sub:a.x.com", "kind": "subdomain", "attrs": {"a": ["1.1.1.1"]},
+              "sources": ["crt.sh"], "first_seen": "t", "last_seen": "t", "confidence": 50},
+             {"key": "svc:a.x.com:443", "kind": "service", "attrs": {"product": "nginx"},
+              "sources": ["shodan"], "first_seen": "t", "last_seen": "t", "confidence": 50}]
+    _s.upsert_assets(_snap)
+    _s.write_snapshot("x.com", _snap, "test")
+    _s.insert_event("x.com", "appeared", "svc:a.x.com:443",
+                    {"attrs": {"product": "nginx"}, "sources": ["shodan"]},
+                    6.8, ["T1190 edge"], [])
+    _s.close()
+    _srv = create_server(Path(td) / "w.db", "127.0.0.1", 0, "TESTTOKEN")
+    _port = _srv.server_address[1]
+    threading.Thread(target=_srv.serve_forever, daemon=True).start()
+    _base = f"http://127.0.0.1:{_port}"
+
+    def _get(path, token=None):
+        req = urllib.request.Request(_base + path)
+        if token:
+            req.add_header("Authorization", f"Bearer {token}")
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status, r.read()
+        except urllib.error.HTTPError as e:
+            return e.code, e.read()
+
+    _st, _ = _get("/api/scopes")
+    check("dashboard: no token -> 401", _st == 401)
+    _st, _ = _get("/api/scopes", token="WRONG")
+    check("dashboard: wrong token -> 401", _st == 401)
+    _st, _b = _get("/api/scopes", token="TESTTOKEN")
+    _js = _json_dash.loads(_b)
+    check("dashboard: scopes api shape", _st == 200 and _js[0]["scope"] == "x.com"
+          and _js[0]["scans"] == 1 and _js[0]["events"] == 1, _js)
+    _st, _b = _get("/api/vectors?scope=x.com", token="TESTTOKEN")
+    _js = _json_dash.loads(_b)
+    check("dashboard: vectors api shape", _st == 200 and _js
+          and _js[0]["asset"] == "svc:a.x.com:443" and _js[0]["label"] == "HIGH", _js[:1])
+    _st, _b = _get("/api/assets?scope=x.com&kind=subdomain", token="TESTTOKEN")
+    _js = _json_dash.loads(_b)
+    check("dashboard: assets api (subdomain)", _st == 200 and len(_js) == 1
+          and _js[0]["sources"] == ["crt.sh"], _js)
+    _st, _b = _get("/api/assets?scope=x.com&kind=service", token="TESTTOKEN")
+    _js = _json_dash.loads(_b)
+    check("dashboard: assets api (service via snapshot membership)",
+          _st == 200 and len(_js) == 1 and _js[0]["key"] == "svc:a.x.com:443", _js)
+    _st, _b = _get("/", token="TESTTOKEN")
+    check("dashboard: page served", _st == 200 and b"ATH" in _b)
+    _st, _ = _get("/nope", token="TESTTOKEN")
+    check("dashboard: 404 for unknown route", _st == 404)
+    _srv.shutdown()
+    _srv.server_close()
+
+
+# ---------------------------------------------------------------- standing conditions
+print("[standing conditions]  (cert + domain expiry)")
+from datetime import datetime as _dt
+from datetime import timedelta as _td
+from datetime import timezone as _tz
+
+from athena.enrich import standing_events as _sev
+
+_now = _dt.now(_tz.utc)
+def _svc(exp):
+    return {"key": "svc:x.com:443", "kind": "service",
+            "attrs": {"cert_expires": exp}, "sources": ["shodan"]}
+
+evs = _sev([_svc((_now + _td(days=5)).timestamp())])
+check("cert expiring in 5d -> MEDIUM-tier event",
+      len(evs) == 1 and evs[0]["kind"] == "cert_expiry" and 5.0 < evs[0]["severity"] <= 5.5,
+      evs)
+evs = _sev([_svc((_now + _td(days=60)).isoformat())])
+check("cert 60d out -> no event", evs == [])
+evs = _sev([_svc((_now - _td(days=3)).timestamp())])
+check("cert EXPIRED -> HIGH phishing-enabler",
+      len(evs) == 1 and evs[0]["severity"] == 7.5 and "phishing" in evs[0]["detail"]["notes"][0],
+      evs)
+evs = _sev([_svc("not-a-date")])
+check("unparseable expiry ignored", evs == [])
+
+_dmg = {"key": "dom:x.com", "kind": "domain",
+        "attrs": {"expiry": (_now + _td(days=10)).date().isoformat()}, "sources": ["rdap"]}
+evs = _sev([_dmg])
+check("domain expiry 10d -> MEDIUM watch",
+      len(evs) == 1 and evs[0]["kind"] == "domain_expiry" and evs[0]["severity"] == 4.5, evs)
+_dmg2 = {"key": "dom:x.com", "kind": "domain",
+         "attrs": {"expiry": (_now - _td(days=2)).date().isoformat()}, "sources": ["rdap"]}
+evs = _sev([_dmg2])
+check("domain EXPIRED -> HIGH + T1583.001 drop-catch",
+      len(evs) == 1 and evs[0]["severity"] == 8.2
+      and any("T1583.001" in t for t in evs[0]["techniques"]), evs)
+# dedup material embeds expiry: renewal creates a NEW one-shot event
+e1 = _sev([_svc((_now + _td(days=5)).timestamp())])[0]
+check("cert event material embeds expiry date", "cert:" in e1["material"], e1["material"])
+
+# rdap fixture (mocked)
+rdap_resp = {"events": [{"eventAction": "registration", "eventDate": "2005-01-01T00:00:00Z"},
+                        {"eventAction": "expiration", "eventDate": "2027-05-30T00:00:00Z"}],
+             "status": ["active", "client transfer prohibited"]}
+recs, err = with_mock(rdap_resp, lambda: P.rdap_domain("x.com"))
+check("rdap parse: expiry + status extracted",
+      err is None and len(recs) == 1 and recs[0]["expiry"].startswith("2027-05-30")
+      and "active" in recs[0]["status"], (err, recs))
+recs, err = with_mock({"events": []}, lambda: P.rdap_domain("x.com"))
+check("rdap without expiry -> clean empty", err is None and recs == [])
+
+
+# ---------------------------------------------------------------- erebus handoff
+print("[handoff contract]")
+from athena.report import handoff_payload as _hp
+
+_hvecs = [{"asset": "svc:vpn.x.com:443", "kind": "service", "event": "observed",
+           "severity": 9.4, "label": "CRITICAL",
+           "techniques": ["T1190 Exploit Public-Facing Application"],
+           "kev_cves": ["CVE-2023-3519"], "attrs": {"product": "Citrix NetScaler",
+                                                    "version": "13.0", "banner": "B" * 300},
+           "notes": ["n"], "sources": ["shodan", "fofa"], "conf": 96},
+          {"asset": "sub:old.x.com", "kind": "subdomain", "event": "appeared",
+           "severity": 6.5, "label": "HIGH", "techniques": ["T1583.001 x"],
+           "kev_cves": [], "attrs": {"dangling": True, "cname": "g.herokuapp.com"},
+           "notes": [], "sources": ["otx"], "conf": 65}]
+_h = _hp("x.com", _hvecs, "2026-09-28T00:00:00+00:00", "0.2.0")
+check("handoff schema stamped", _h["schema"] == "athena/entry-vectors/1"
+      and _h["operator_review_required"] is True and _h["touch"] == "passive")
+_v1 = _h["entry_vectors"][0]
+check("handoff host/port parsed", _v1["host"] == "vpn.x.com" and _v1["port"] == 443)
+check("handoff banner excerpt capped", _v1["evidence"]["banner_excerpt"]
+      and len(_v1["evidence"]["banner_excerpt"]) <= 160)
+check("handoff techniques are ids", _v1["techniques"] == ["T1190"])
+check("handoff kev action", "erebus" in _v1["recommended_action"])
+_v2 = _h["entry_vectors"][1]
+check("handoff dangling action", "claim" in _v2["recommended_action"])
+
+
+# handoff dedupe
+from athena.report import dedupe_vectors as _dv
+
+_dup = [{"asset": "svc:x:443", "severity": 6.8, "label": "HIGH"},
+        {"asset": "svc:x:443", "severity": 6.8, "label": "HIGH"},
+        {"asset": "ip:1.2.3.4", "severity": 5.5, "label": "MEDIUM"},
+        {"asset": "svc:x:443", "severity": 3.0, "label": "LOW"}]
+_dvd = _dv(_dup)
+check("vectors deduped per asset (max severity kept)",
+      len(_dvd) == 2 and _dvd[0]["asset"] == "svc:x:443" and _dvd[0]["severity"] == 6.8, _dvd)
+
 print(f"\n{PASS} passed, {FAIL} failed")
 sys.exit(1 if FAIL else 0)

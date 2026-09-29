@@ -310,6 +310,27 @@ def zoomeye_search(key: str, domain: str):
     return out, None
 
 
+# ---------------------------------------------------------------- rdap (keyless)
+
+def rdap_domain(domain: str):
+    """Registry data via RDAP bootstrap (rdap.org -> registry). Passive.
+    Expiry/status become a tracked domain asset; some TLDs lack RDAP and
+    degrade gracefully."""
+    st, js = _req(f"https://rdap.org/domain/{urllib.parse.quote(domain)}",
+                  timeout=30, retries=1)
+    if st != 200 or not isinstance(js, dict):
+        return [], f"HTTP {st}: {str(js)[:120]}"
+    expiry = ""
+    for ev in js.get("events") or []:
+        if ev.get("eventAction") == "expiration":
+            expiry = ev.get("eventDate", "")
+    if not expiry:
+        return [], None  # RDAP answered but publishes no expiry — not an error
+    return [{"source": "rdap", "kind": "domain_record", "fqdn": domain,
+             "expiry": expiry,
+             "status": [s for s in js.get("status") or [] if isinstance(s, str)][:6]}], None
+
+
 # ---------------------------------------------------------------- dns (light touch)
 
 def resolve_a(host: str) -> list[str]:
@@ -352,6 +373,7 @@ def collect_all(domain: str, progress=print) -> tuple[list[dict], list[tuple[str
     if config.get("SECURITYTRAILS_API_KEY"):
         jobs.append(("securitytrails", lambda: securitytrails_subdomains(config.get("SECURITYTRAILS_API_KEY"), domain)))
     jobs.append(("wayback", lambda: wayback_subdomains(domain)))
+    jobs.append(("rdap", lambda: rdap_domain(domain)))
     if config.get("NETLAS_API_KEY"):
         jobs.append(("netlas", lambda: netlas_search(config.get("NETLAS_API_KEY"), domain)))
     if config.get("ZOOMEYE_API_KEY"):

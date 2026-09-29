@@ -64,8 +64,9 @@ def build_assets(records: list[dict], domain: str, resolve,
     assets = Assets()
     cname_map: dict[str, str] = {}
     fqdns: set[str] = set()
+    domain_records: dict[str, dict] = {}
 
-    # pass 1: dns records + subdomains
+    # pass 1: dns records + subdomains + rdap domain records
     for r in records:
         if r.get("kind") == "dns_record":
             fqdn = (r.get("fqdn") or "").lower().strip(".")
@@ -79,6 +80,10 @@ def build_assets(records: list[dict], domain: str, resolve,
             fq = (r.get("fqdn") or "").lower().strip(".")
             if fq:
                 fqdns.add(fq)
+        elif r.get("kind") == "domain_record":
+            fq = (r.get("fqdn") or "").lower().strip(".")
+            if fq:
+                domain_records[fq] = r
 
     # pass 2: services reveal more hostnames
     for r in records:
@@ -122,6 +127,16 @@ def build_assets(records: list[dict], domain: str, resolve,
         if r.get("cpe"):
             attrs["cpe"] = r["cpe"]
         assets.add(key, "service", attrs, r["source"])
+
+    # rdap domain assets (registry expiry/status — diffed like everything else)
+    for fq, rec in domain_records.items():
+        attrs = {}
+        if rec.get("expiry"):
+            attrs["expiry"] = rec["expiry"]
+        if rec.get("status"):
+            attrs["status"] = rec["status"]
+        if attrs:
+            assets.add(f"dom:{fq}", "domain", attrs, "rdap")
 
     # dangling-CNAME detection (passive): known CNAME + unresolvable now +
     # CNAME target itself unresolvable -> takeover candidate

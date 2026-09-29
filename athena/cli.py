@@ -14,7 +14,14 @@ import time
 from . import __version__, alert, config
 from . import report as rep
 from .diff import diff_snapshots
-from .enrich import ATTACK_TABLE, _fingerprint, enrich_event, load_kev, severity_label
+from .enrich import (
+    ATTACK_TABLE,
+    _fingerprint,
+    enrich_event,
+    load_kev,
+    severity_label,
+    standing_events,
+)
 from .normalize import build_assets, utcnow
 from .paths import DB_PATH, OUT_DIR
 from .paths import ensure as ensure_paths
@@ -119,6 +126,12 @@ def run_scan(scope: str, do_alert: bool = True, extra_subs: str | None = None) -
 
     events = diff_snapshots(store, scope, snap_id)
     print(f"[*] snapshot #{snap_id} · diff: {len(events)} raw event(s)")
+
+    # standing conditions (cert/domain expiry) — true now, not scan-to-scan
+    standing = standing_events(asset_list)
+    if standing:
+        print(f"[*] standing conditions: {len(standing)} expiry finding(s)")
+        events = events + standing
 
     kev = load_kev()
 
@@ -226,6 +239,8 @@ def _parse_scopes_yaml(text: str) -> list[dict]:
             k, v = k.strip(), v.strip()
             if v.startswith("[") and v.endswith("]"):
                 v = [x.strip().strip("\"'") for x in v[1:-1].split(",") if x.strip()]
+            else:
+                v = v.strip("\"'")  # quoted scalars must not keep their quotes
             cur[k] = v
     return scopes
 
@@ -239,13 +254,27 @@ def _load_scopes_file(path_str: str) -> list[dict]:
     text = path.read_text(encoding="utf-8", errors="replace")
     scopes = (json.loads(text).get("scopes", []) if path.suffix == ".json"
               else _parse_scopes_yaml(text))
-    if not scopes:
-        sys.exit(f"[!] no scopes parsed from {path}")
+    cleaned = []
     for s in scopes:
-        s.setdefault("domains", [])
+        if not isinstance(s, dict) or not s.get("domains"):
+            continue  # ghost entries (wrong yaml shape) — skip, not scan
+        if isinstance(s["domains"], str):  # scalar -> single-item list
+            s["domains"] = [s["domains"].strip("\"'")]
         s.setdefault("interval_min", 60)
-        s.setdefault("name", s["domains"][0] if s["domains"] else "unnamed")
-    return scopes
+        s.setdefault("name", s["domains"][0])
+        cleaned.append(s)
+    if not cleaned:
+        sys.exit(f"[!] no usable scopes in {path} (each needs at least one domain)")
+    # duplicate names would collide in the scheduler — uniquify
+    seen: dict[str, int] = {}
+    for s in cleaned:
+        base = s["name"]
+        if base in seen:
+            seen[base] += 1
+            s["name"] = f"{base}-{seen[base]}"
+        else:
+            seen[base] = 1
+    return cleaned
 
 
 def cmd_watch(args):
@@ -257,14 +286,15 @@ def cmd_watch(args):
         scopes = [{"name": args.scope, "domains": [args.scope],
                    "interval_min": args.interval_min}]
 
+    # schedule per index (names can be duplicated/renamed — never collide)
     now = time.time()
-    next_run = {s["name"]: now for s in scopes}
+    next_run = [now for _ in scopes]
     cycle = 0
     try:
         while True:
             now = time.time()
-            for s in scopes:
-                if next_run[s["name"]] > now:
+            for i, s in enumerate(scopes):
+                if next_run[i] > now:
                     continue
                 cycle += 1
                 role = f" · role={s['role']}" if s.get("role") else ""
@@ -274,8 +304,8 @@ def cmd_watch(args):
                 interval = max(60, int(s["interval_min"]) * 60)
                 if args.jitter:
                     interval += random.randint(-interval // 10, interval // 10)
-                next_run[s["name"]] = time.time() + interval
-            wait = max(1.0, min(next_run.values()) - time.time())
+                next_run[i] = time.time() + interval
+            wait = max(1.0, min(next_run) - time.time())
             m, sec = int(wait // 60), int(wait % 60)
             print(f"[*] next scan in {m}m{sec:02d}s — Ctrl+C to stop")
             time.sleep(min(wait, 60))
@@ -288,7 +318,16 @@ def cmd_events(args):
     store = Store(DB_PATH)
     evs = store.events(args.scope, args.since)
     if not evs:
-        print("no events stored")
+        print("[]" if args.json else "no events stored")
+        return
+    if args.json:
+        out = []
+        for e in evs:
+            e = dict(e)
+            e["techniques"] = json.loads(e.pop("techniques") or "[]")
+            e["kev_cves"] = json.loads(e.pop("kev_cves") or "[]")
+            out.append(e)
+        print(json.dumps(out, indent=2, default=str))
         return
     print(f"{len(evs)} event(s):")
     for e in evs:
@@ -366,6 +405,40 @@ def cmd_export(args):
     store.close()
 
 
+def cmd_handoff(args):
+    """Emit the versioned Erebus hand-off contract (entry-vectors JSON)."""
+    config.load_env()
+    ensure_paths()
+    store = Store(DB_PATH)
+    scope = args.scope.lower().strip()
+    evs = store.events(scope)
+    assets_by_key = {}
+    for e in evs:
+        if e["asset_key"] not in assets_by_key:
+            a = store.asset(e["asset_key"])
+            if a:
+                assets_by_key[e["asset_key"]] = a
+    vectors = [v for v in rep.entry_vectors(evs, assets_by_key)
+               if v["severity"] >= args.min_severity]
+    vectors = rep.dedupe_vectors(vectors)
+    payload = rep.handoff_payload(scope, vectors, utcnow(), __version__)
+    out = OUT_DIR / f"{scope}-handoff.json"
+    out.write_text(json.dumps(payload, indent=2, default=str), encoding="utf-8")
+    print(json.dumps(payload, indent=2, default=str))
+    print(f"\n[*] hand-off written: {out} · {len(vectors)} vector(s) >= "
+          f"{args.min_severity}", file=sys.stderr)
+    store.close()
+
+
+def cmd_serve(args):
+    """Read-only web dashboard (localhost + token auth)."""
+    from .web import serve
+
+    config.load_env()
+    ensure_paths()
+    serve(DB_PATH, bind=args.bind, port=args.port)
+
+
 def main():
     p = argparse.ArgumentParser(prog="athena",
                                 description="passive external attack-surface intelligence")
@@ -390,6 +463,7 @@ def main():
     e = sub.add_parser("events", help="list stored events")
     e.add_argument("--scope")
     e.add_argument("--since")
+    e.add_argument("--json", action="store_true", help="emit JSON (scripting)")
 
     r = sub.add_parser("report", help="regenerate report from stored events")
     r.add_argument("--scope", required=True)
@@ -398,11 +472,20 @@ def main():
     x = sub.add_parser("export", help="export assets/IOCs/events as a JSON feed")
     x.add_argument("--scope", required=True)
 
+    h = sub.add_parser("handoff", help="emit the Erebus entry-vectors contract")
+    h.add_argument("--scope", required=True)
+    h.add_argument("--min-severity", type=float, default=4.0)
+
+    v = sub.add_parser("serve", help="read-only web dashboard (localhost + token)")
+    v.add_argument("--port", type=int, default=7777)
+    v.add_argument("--bind", default="127.0.0.1")
+
     args = p.parse_args()
     if args.cmd == "watch" and not args.config and not args.scope:
         p.error("watch needs --config or --scope")
     {"doctor": cmd_doctor, "scan": cmd_scan, "watch": cmd_watch, "events": cmd_events,
-     "report": cmd_report, "export": cmd_export}[args.cmd](args)
+     "report": cmd_report, "export": cmd_export,
+     "serve": cmd_serve, "handoff": cmd_handoff}[args.cmd](args)
 
 
 if __name__ == "__main__":
