@@ -10,6 +10,12 @@ from datetime import datetime, timezone
 from . import config
 from .providers import _req
 
+
+def _version() -> str:
+    from . import __version__
+
+    return __version__
+
 COLORS = {"CRITICAL": 0xE5484D, "HIGH": 0xF5A524,
           "MEDIUM": 0xE2C94D, "LOW": 0x6CA0DD}
 MAX_FIELDS = 20  # discord caps at 25; leave headroom
@@ -57,7 +63,7 @@ def send_discord(webhook: str | None, scope: str, vectors: list[dict],
                        f"{stats.get('assets', '?')} assets tracked · touch=passive",
         "color": color,
         "fields": fields,
-        "footer": {"text": f"athena v0.1 · scan of {scope} · dossier has full log"},
+        "footer": {"text": f"athena v{_version()} · scan of {scope} · dossier has full log"},
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
     st, resp = _req(webhook, method="POST", body={"embeds": [embed]}, retries=1)

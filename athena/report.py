@@ -53,8 +53,11 @@ def entry_vectors(events: list[dict], assets_by_key: dict[str, dict] | None = No
 
 
 def terminal(scope: str, stats: dict, vectors: list[dict], errors: list[tuple[str, str]]) -> str:
+    from . import __version__
+
     lines = []
-    lines.append(f"ATHENA v0.1 · scope {scope} · touch=passive (+recursive DNS) · 0 packets to target")
+    lines.append(f"ATHENA v{__version__} · scope {scope} · touch=passive "
+                 f"(+recursive DNS) · 0 packets to target")
     lines.append(f"assets: {stats.get('assets', 0)} · records merged: {stats.get('records', 0)} "
                  f"· subdomains: {stats.get('subdomains', 0)} · services: {stats.get('services', 0)}")
     lines.append(f"new events: {stats.get('events_new', 0)}"
