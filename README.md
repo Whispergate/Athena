@@ -91,6 +91,15 @@ JSON feed for intel platforms.
 
 *FOFA needs email+key; Censys needs id+secret — skipped gracefully otherwise.
 
+## Data handling
+
+Scope definitions, collected assets, and the event timeline are **engagement
+data**: they live only in your local `ATHENA_HOME` (SQLite + dossiers, no
+telemetry, no cloud sync). Handle them per your engagement agreement —
+deleting `ATHENA_HOME` (or the scope's rows in its DB) is a complete removal.
+API keys are read from the environment or local `.env` and never leave the
+machine except as queries to the providers you configured.
+
 ## Credits
 
 Built on the shoulders of: [ProjectDiscovery](https://github.com/projectdiscovery)
