@@ -15,7 +15,7 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: lint
         run: |
-          pip install ruff
+          pip install ruff==0.16.9
           ruff check athena tests
       - name: install (validates packaging)
         run: pip install -e .
