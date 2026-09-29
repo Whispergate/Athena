@@ -20,6 +20,8 @@ jobs:
       - name: install (validates packaging)
         run: pip install -e .
       - name: unit tests
-        run: python tests/test_unit.py
+        run: |
+          python tests/test_unit.py
+          python tests/test_defects.py
       - name: entry point
         run: athena --version

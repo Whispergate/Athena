@@ -198,6 +198,16 @@ def create_server(db_path: Path, bind: str = "127.0.0.1", port: int = 7777,
             self.end_headers()
             self.wfile.write(body)
 
+        def _int_param(self, q: dict, name: str, default: int,
+                       lo: int, hi: int) -> int | None:
+            """Clamped integer query param; None signals a client error (400)."""
+            raw = q.get(name, [str(default)])[0]
+            try:
+                v = int(raw)
+            except ValueError:
+                return None
+            return max(lo, min(v, hi))
+
         def do_GET(self):
             if not self._authed():
                 self._send(401, b"unauthorized", "text/plain")
@@ -214,18 +224,26 @@ def create_server(db_path: Path, bind: str = "127.0.0.1", port: int = 7777,
                     self._send(200, json.dumps(dash.timeline(
                         q.get("scope", [""])[0])).encode(), "application/json")
                 elif u.path == "/api/events":
+                    lim = self._int_param(q, "limit", 100, 1, 1000)
+                    if lim is None:
+                        self._send(400, b'{"error": "limit must be an integer"}',
+                                   "application/json")
+                        return
                     self._send(200, json.dumps(dash.events(
-                        q.get("scope", [""])[0],
-                        int(q.get("limit", ["100"])[0]))).encode(),
+                        q.get("scope", [""])[0], lim)).encode(),
                         "application/json")
                 elif u.path == "/api/vectors":
                     self._send(200, json.dumps(dash.vectors(
                         q.get("scope", [""])[0])).encode(), "application/json")
                 elif u.path == "/api/assets":
+                    lim = self._int_param(q, "limit", 300, 1, 1000)
+                    if lim is None:
+                        self._send(400, b'{"error": "limit must be an integer"}',
+                                   "application/json")
+                        return
                     self._send(200, json.dumps(dash.assets(
                         q.get("scope", [""])[0], q.get("kind", ["subdomain"])[0],
-                        q.get("q", [""])[0],
-                        int(q.get("limit", ["300"])[0]))).encode(),
+                        q.get("q", [""])[0], lim)).encode(),
                         "application/json")
                 else:
                     self._send(404, b"not found", "text/plain")
