@@ -39,6 +39,31 @@ initial-access techniques, ranked into entry-vector hypotheses.
 - **Honest claims**: every finding carries its evidence, sources, and a
   confidence score. No version → no CVE claim.
 
+## Why red teamers care
+
+**Pre-engagement scoping in one command.** Every passive source you query by
+hand — merged, deduped, and ranked. `athena scan` turns the 2–4 hour manual
+recon ritual into ten minutes of reviewing hypotheses: *"these three hosts
+first, one matches a KEV CVE."*
+
+**Intel that's fresh at kickoff, not stale from scoping week.** Run
+`athena watch` during prep and every perimeter change pages you — the forgotten
+staging server, the new VPN portal, the cert about to expire, the dangling
+CNAME that's a takeover candidate. All passive: the target's SOC never sees
+pre-attack enumeration.
+
+**It only pages for what matters.** Quorum confirmation, grace windows,
+rotation memory, dedup — a quiet channel means the perimeter is quiet.
+
+**Retainer-ready.** Full-log dossiers and IOC exports generate themselves
+every scan; continuous perimeter monitoring becomes a service line.
+
+**Fits the Whispergate stack.** Ranked vectors feed **Erebus** via the
+versioned `entry_vectors` contract; the `role: self` scope watches your own
+redirectors (CT-log/DNS changes) as the outward-looking complement to
+**InfraGuard**; `athena export` produces the asset/IOC feed an intel platform
+like **IntelliBird** can ingest.
+
 ## Install
 
 ```bash
