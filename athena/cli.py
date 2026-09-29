@@ -239,6 +239,8 @@ def _parse_scopes_yaml(text: str) -> list[dict]:
             k, v = k.strip(), v.strip()
             if v.startswith("[") and v.endswith("]"):
                 v = [x.strip().strip("\"'") for x in v[1:-1].split(",") if x.strip()]
+            else:
+                v = v.strip("\"'")  # quoted scalars must not keep their quotes
             cur[k] = v
     return scopes
 
@@ -252,13 +254,27 @@ def _load_scopes_file(path_str: str) -> list[dict]:
     text = path.read_text(encoding="utf-8", errors="replace")
     scopes = (json.loads(text).get("scopes", []) if path.suffix == ".json"
               else _parse_scopes_yaml(text))
-    if not scopes:
-        sys.exit(f"[!] no scopes parsed from {path}")
+    cleaned = []
     for s in scopes:
-        s.setdefault("domains", [])
+        if not isinstance(s, dict) or not s.get("domains"):
+            continue  # ghost entries (wrong yaml shape) — skip, not scan
+        if isinstance(s["domains"], str):  # scalar -> single-item list
+            s["domains"] = [s["domains"].strip("\"'")]
         s.setdefault("interval_min", 60)
-        s.setdefault("name", s["domains"][0] if s["domains"] else "unnamed")
-    return scopes
+        s.setdefault("name", s["domains"][0])
+        cleaned.append(s)
+    if not cleaned:
+        sys.exit(f"[!] no usable scopes in {path} (each needs at least one domain)")
+    # duplicate names would collide in the scheduler — uniquify
+    seen: dict[str, int] = {}
+    for s in cleaned:
+        base = s["name"]
+        if base in seen:
+            seen[base] += 1
+            s["name"] = f"{base}-{seen[base]}"
+        else:
+            seen[base] = 1
+    return cleaned
 
 
 def cmd_watch(args):
@@ -270,14 +286,15 @@ def cmd_watch(args):
         scopes = [{"name": args.scope, "domains": [args.scope],
                    "interval_min": args.interval_min}]
 
+    # schedule per index (names can be duplicated/renamed — never collide)
     now = time.time()
-    next_run = {s["name"]: now for s in scopes}
+    next_run = [now for _ in scopes]
     cycle = 0
     try:
         while True:
             now = time.time()
-            for s in scopes:
-                if next_run[s["name"]] > now:
+            for i, s in enumerate(scopes):
+                if next_run[i] > now:
                     continue
                 cycle += 1
                 role = f" · role={s['role']}" if s.get("role") else ""
@@ -287,8 +304,8 @@ def cmd_watch(args):
                 interval = max(60, int(s["interval_min"]) * 60)
                 if args.jitter:
                     interval += random.randint(-interval // 10, interval // 10)
-                next_run[s["name"]] = time.time() + interval
-            wait = max(1.0, min(next_run.values()) - time.time())
+                next_run[i] = time.time() + interval
+            wait = max(1.0, min(next_run) - time.time())
             m, sec = int(wait // 60), int(wait % 60)
             print(f"[*] next scan in {m}m{sec:02d}s — Ctrl+C to stop")
             time.sleep(min(wait, 60))
