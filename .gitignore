@@ -10,3 +10,6 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 scopes.local.yaml
+build/
+dist/
+.venv*/
